@@ -1,7 +1,7 @@
 """
 ===============================================================
     Radium Engine Core (RCE-8b)
-    Emulator Skeleton v0.0.2b
+    Emulator Skeleton v0.0.3b
 
     Author: Aidan A. Bradley
     Email: aabradley01@gmail.com
@@ -120,7 +120,7 @@ RAM = [0x0] * (32 * 1024)
 # =============================================================
 
 #: Number of general purpose registers (R0 - R14).
-REGISTER_COUNT = 15
+REGISTER_COUNT = 16
 
 #: General purpose register file.
 registers = [0] * REGISTER_COUNT    # initialize registers with zeros
@@ -1143,8 +1143,6 @@ def execALUOp(decoded):
 
         return True
 
-    return False
-
     #
     # SHL (Shift Left by 1)
     #
@@ -1414,6 +1412,8 @@ def execALUOp(decoded):
         updateZNFlags(quotient)
 
         return True
+
+    return False
 
 # =============================================================
 #    MEMORY FAMILY EXECUTION

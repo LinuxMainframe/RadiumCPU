@@ -8,21 +8,44 @@ A custom 16-bit homebrew CPU architecture and Python emulator designed for deter
 
 ## Current Status
 
-* **Emulator Version:** `v0.0.2b` (Implemented in `main.py` & verified by `tests.py`)
-* **Documentation (`DOC.md`):** Matches Revision `v0.0.2b` to reflect the exact state of the working code.
-* **Architecture Roadmap:** Architectural design planning is currently targeting **v0.0.4b** (introducing hard/soft fault vectoring, cycle-deterministic timing, multi-bus memory separation, and fixed-header data structures).
+- **Emulator Version:** `v0.0.3b` (Implemented in `main.py` & verified by `tests.py`)
+- **Documentation (`DOC.md`):** Updated to reflect complete ALU, Memory, Control Flow, and Context management implementations.
+- **Architecture Roadmap:** Next phase targets **`v0.0.4b`** (introducing real-time MMIO hardware peripherals, cycle-deterministic execution tracking, privilege separation via `CTRL`, and a two-pass assembler toolchain).
 
 ---
 
-## Architecture Overview (v0.0.2b Base)
+## Architecture Overview
 
-* **Address Space:** $64\text{ KB}$ byte-addressable, little-endian memory.
-* **Instruction Format:** Fixed 16-bit instruction words (7-bit Opcode, 1-bit Size bit, two 4-bit Register fields).
-* **Register File:** 15 General-Purpose Registers (`R0`–`R14`), plus dedicated Special Registers (`PC`, `IP`, `SP`, `BP`, `SIVBR`, `UIVBR`, `CTRL`, `BOOTCFG`, `FLAGS`).
-* **Interrupt Architecture:** Dual-tiered System and User Interrupt Vector Tables (`SIVT` anchored at `0xF000`, `UIVT` anchored at `0xE000`).
-* **ALU Operations:** Implemented instructions include `NOP`, `MOV`, `SWAP`, `ADD`, `SUB`, `INC`, `DEC`, `CMP`, `AND`, `OR`, `XOR`, and `NOT` with Zero ($Z$) and Negative ($N$) flag updates.
+- **Address Space:** $64\text{ KB}$ byte-addressable, little-endian memory space.
+- **Instruction Format:** Fixed 16-bit instruction words (`[15:9]` Opcode, `[8]` Size bit, `[7:4]` Field A, `[3:0]` Field B) with multi-word extensions (`MOVI`, `LEA`, absolute jumps/calls) for 16-bit constants and displacements.
+- **Register File:** 15 General-Purpose Registers (`R0`–`R14`), plus dedicated Special Registers (`PC`, `IP`, `SP`, `BP`, `SIVBR`, `UIVBR`, `CTRL`, `BOOTCFG`, `FLAGS`). `R15` serves as the explicit upper-word/remainder target for 32-bit math.
+- **Status Flags:** Complete 7-bit `FLAGS` register handling bit positions: Carry ($C$), Zero ($Z$), Negative ($N$), Overflow ($V$), Interrupt-Enable ($IF$), Trap ($TF$), and Quality ($Q$).
+- **Interrupt Architecture:** Dual-tiered System and User Interrupt Vector Tables (`SIVT` anchored at `0xF000`, `UIVT` anchored at `0xE000`) with indivisible interrupt stack frames and `IRET` restoration.
 
-### Memory Map
+---
+
+## Instruction Set Architecture Summary
+
+### 1. ALU & Arithmetic (`0x00 – 0x27`)
+- **Data Movement & Address:** `NOP`, `MOV`, `SWAP`, `LEA`, `MOVI` (multi-word immediate load).
+- **Arithmetic & 32-Bit Math:** `ADD`, `SUB`, `MUL` (unsigned product to `R15:dst`), `IMUL` (signed product to `R15:dst`), `DIV` (quotient to `dst`, remainder to `R15`), `IDIV` (signed divide), `INC`, `DEC`, `NEG` (two's complement).
+- **Bitwise & Logic:** `AND`, `OR`, `XOR`, `NOT`, `TEST`.
+- **Shifts & Rotates:** `SHL`, `SHR`, `ROL`, `ROR` (with Carry flag integration).
+
+### 2. Memory & Stack Operations (`0x28 – 0x2F`)
+- **Indirect Access:** `LD` (Load word/byte from `[Field A]` into `Field B`), `STR` (Store word/byte from `Field B` to `[Field A]`).
+- **Stack Operations:** `PUSH`, `POP` (descending stack with byte/word size-bit support).
+- **Context Handling:** `PUSHF`, `POPF` (FLAGS preservation), `PUSHA`, `POPA` (bulk push `R0`–`R14` / pop `R14`–`R0`).
+
+### 3. Control Flow & Interrupts (`0x30 – 0x57`)
+- **Unconditional Jumps:** `JMP` (absolute 2-word jump), `JMPR` (register-indirect jump).
+- **Conditional Branches:** Signed (`JL`, `JGE`), Unsigned (`JB`, `JAE`, `JA`, `JBE`), Equality (`JE`, `JNE`), and Overflow (`JO`, `JNO`).
+- **Subroutines:** `CALL` (absolute call), `CALLR` (register-indirect call), `RET` (subroutine return).
+- **Interrupt Traps:** `INT` (software vector trap), `IRET` (interrupt return restoring `FLAGS` and `PC`).
+
+---
+
+## Memory Map
 
 | Region | Address Range | Size | Description |
 | :--- | :--- | :--- | :--- |
@@ -37,37 +60,8 @@ A custom 16-bit homebrew CPU architecture and Python emulator designed for deter
 ## Project Layout
 
 ```text
-├── main.py        # Core emulator logic (Fetch/Decode/Execute, Memory Bus, Registers)
-├── tests.py       # Comprehensive self-test suite (Memory bounds, ALU, Pipeline, IVT)
-├── DOC.md         # Architecture specification for v0.0.2b (matches main.py)
-└── README.md      # Project overview
+├── main.py        # Core emulator engine (Fetch/Decode/Execute pipelines, Memory Bus, Registers)
+├── tests.py       # Automated self-test suite (Instruction verification, Memory safety, Stack frames)
+├── DOC.md         # Full architecture specification document
+└── README.md      # Project overview & roadmap
 ```
-
----
-
-## Running the Emulator & Test Suite
-
-The emulator relies purely on standard Python 3 with no external dependencies.
-
-### Inspect CPU Reset State
-To initialize the CPU, build the vector tables, load the reset vector, and inspect the default register state:
-
-```bash
-python main.py
-```
-
-### Run Automated Tests
-To run the full suite of memory mapping, instruction decoding, register boundary, and execution tests:
-
-```bash
-python tests.py
-```
-
----
-
-## Next Steps (Roadmap to v0.0.4b+)
-
-- [ ] **Control Flow & Branching:** Implement `JMP`, `CALL`, `RET`, and flag-driven conditional jumps (`JZ`, `JNZ`, `JL`, `JG`).
-- [ ] **Deterministic Timing Model:** Define exact cycle counts for instruction execution and fault handling.
-- [ ] **Hardware Fault Vector Table:** Implement Critical vs. Non-Critical (Hard/Soft) fault routing.
-- [ ] **Multi-Bus Memory Separation:** Separate CPU SRAM from DMA streaming slots and off-bus VRAM.
