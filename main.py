@@ -1059,6 +1059,48 @@ def execALUOp(decoded):
 
     return False
 
+    #
+    # SHL (Shift Left by 1)
+    #
+    elif opcode == OP_SHL:
+        dst = decoded["fieldB"]
+        if not validRegister(dst):
+            return False
+
+        val = registers[dst]
+        
+        # Bit 15 goes into Carry
+        if val & 0x8000:
+            setFlag(FLAG_C)
+        else:
+            clearFlag(FLAG_C)
+
+        result = (val << 1) & 0xFFFF
+        registers[dst] = result
+        updateLogicFlags(result)  # Sets Z and N, clears V
+        return True
+
+    #
+    # SHR (Shift Right by 1)
+    #
+    elif opcode == OP_SHR:
+        dst = decoded["fieldB"]
+        if not validRegister(dst):
+            return False
+
+        val = registers[dst]
+        
+        # Bit 0 goes into Carry
+        if val & 0x1:
+            setFlag(FLAG_C)
+        else:
+            clearFlag(FLAG_C)
+
+        result = val >> 1
+        registers[dst] = result
+        updateLogicFlags(result)
+        return True
+
 def updateLogicFlags(result):
     """
     Update flags for logic operations: Zero and Negative reflect the result,
