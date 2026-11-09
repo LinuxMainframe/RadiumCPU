@@ -291,6 +291,11 @@ OP_STR                 = 0x29   #: Store value into memory
 OP_PUSH                = 0x2A   #: Push register onto descending stack (sz: 0=byte, 1=word).
 OP_POP                 = 0x2B   #: Pop from descending stack into register (sz: 0=byte, 1=word).
 
+OP_PUSHF               = 0x2C   #: Push FLAGS register.
+OP_POPF                = 0x2D   #: Pop FLAGS register.
+OP_PUSHA               = 0x2E   #: Push all General Purpose Registers (R0 - R14).
+OP_POPA                = 0x2F   #: Pop all General Purpose Registers (R14 - R0).
+
 # Control Flow
 OP_JMP                 = 0x30   #: Unconditional absolute jump (2-word).
 OP_JMPR                = 0x31   #: Unconditional register-indirect jump.
@@ -1522,6 +1527,49 @@ def execMemoryOp(decoded):
                 return False
             registers[reg] = val & 0xFF
             updateZNFlags(val & 0xFF)
+
+        return True
+
+    #
+    # PUSHF (Push FLAGS register onto the descending stack)
+    #
+    elif opcode == OP_PUSHF:
+        pushWord(special["FLAGS"])
+        return True
+
+    #
+    # POPF (Pop value from descending stack into FLAGS register)
+    #
+    elif opcode == OP_POPF:
+        val = popWord()
+        if val is None:
+            return False
+        special["FLAGS"] = val & 0xFFFF
+        return True
+
+    #
+    # PUSHA (Push all General Purpose Registers R0 through R14)
+    #
+    elif opcode == OP_PUSHA:
+        for r in range(REGISTER_COUNT):
+            pushWord(registers[r])
+        return True
+
+    #
+    # POPA (Pop all General Purpose Registers R14 down to R0)
+    #
+    elif opcode == OP_POPA:
+        # Temporary buffer to hold popped values in reverse order
+        temp_regs = {}
+        for r in range(REGISTER_COUNT - 1, -1, -1):
+            val = popWord()
+            if val is None:
+                return False
+            temp_regs[r] = val & 0xFFFF
+
+        # Restore registers
+        for r in range(REGISTER_COUNT):
+            registers[r] = temp_regs[r]
 
         return True
 
