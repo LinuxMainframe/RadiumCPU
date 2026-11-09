@@ -288,6 +288,9 @@ OP_ROR                 = 0x23   #: Rotate right.
 OP_LD                  = 0x28   #: Load value from memory
 OP_STR                 = 0x29   #: Store value into memory
 
+OP_PUSH                = 0x2A   #: Push register onto descending stack (sz: 0=byte, 1=word).
+OP_POP                 = 0x2B   #: Pop from descending stack into register (sz: 0=byte, 1=word).
+
 # Control Flow
 OP_JMP                 = 0x30   #: Unconditional absolute jump (2-word).
 OP_JMPR                = 0x31   #: Unconditional register-indirect jump.
@@ -785,6 +788,34 @@ def execALUOp(decoded):
     # NOP
     #
     if opcode == OP_NOP:
+        return True
+
+    #
+    # LEA (Load Effective Address: Base Register + 16-bit literal offset -> Destination Reg)
+    # Encoded with Base Register in fieldA, Destination Register in fieldB, followed by 16-bit offset word.
+    #
+    elif opcode == OP_LEA:
+        base_reg = decoded["fieldA"]
+        dst_reg = decoded["fieldB"]
+
+        if not validRegister(base_reg) or not validRegister(dst_reg):
+            return False
+
+        # 1. Fetch the 16-bit offset/displacement word from the instruction stream
+        offset_val = readWord(special["PC"])
+        if offset_val is None:
+            return False
+
+        # 2. Advance PC past the offset word
+        special["PC"] += 2
+
+        # 3. Compute effective address: Base + Offset (masked to 16 bits)
+        effective_addr = (registers[base_reg] + offset_val) & 0xFFFF
+
+        # 4. Store effective address in destination register and update Z/N flags
+        registers[dst_reg] = effective_addr
+        updateZNFlags(effective_addr)
+
         return True
 
     #
@@ -1447,6 +1478,50 @@ def execMemoryOp(decoded):
             success = writeByte(addr, val & 0xFF)
             if not success:
                 return False  # ROM write-protection or unmapped
+
+        return True
+
+    #
+    # PUSH (Push register value onto the descending stack)
+    #
+    elif opcode == OP_PUSH:
+        reg = decoded["fieldB"]
+        if not validRegister(reg):
+            return False
+
+        val = registers[reg]
+
+        if sz == 1:
+            # Word Push (16-bit)
+            pushWord(val)
+        else:
+            # Byte Push (8-bit)
+            pushByte(val & 0xFF)
+
+        return True
+
+    #
+    # POP (Pop value from descending stack into register)
+    #
+    elif opcode == OP_POP:
+        reg = decoded["fieldB"]
+        if not validRegister(reg):
+            return False
+
+        if sz == 1:
+            # Word Pop (16-bit)
+            val = popWord()
+            if val is None:
+                return False
+            registers[reg] = val & 0xFFFF
+            updateZNFlags(val & 0xFFFF)
+        else:
+            # Byte Pop (8-bit, zero-extended)
+            val = popByte()
+            if val is None:
+                return False
+            registers[reg] = val & 0xFF
+            updateZNFlags(val & 0xFF)
 
         return True
 
