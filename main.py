@@ -1101,6 +1101,234 @@ def execALUOp(decoded):
         updateLogicFlags(result)
         return True
 
+    #
+    # ROL (Rotate Left by 1)
+    #
+    elif opcode == OP_ROL:
+        dst = decoded["fieldB"]
+        if not validRegister(dst):
+            return False
+
+        val = registers[dst]
+        
+        # Check bit 15 before shifting
+        old_msb = (val >> 15) & 1
+
+        # Shift left by 1, mask to 16 bits, and wrap old MSB into bit 0
+        result = ((val << 1) & 0xFFFF) | old_msb
+
+        # Set Carry flag if MSB was 1, else clear it
+        if old_msb:
+            setFlag(FLAG_C)
+        else:
+            clearFlag(FLAG_C)
+
+        registers[dst] = result
+        updateLogicFlags(result)
+        return True
+
+    #
+    # ROR (Rotate Right by 1)
+    #
+    elif opcode == OP_ROR:
+        dst = decoded["fieldB"]
+        if not validRegister(dst):
+            return False
+
+        val = registers[dst]
+        
+        # Check bit 0 before shifting
+        old_lsb = val & 1
+
+        # Shift right by 1 and wrap old LSB into bit 15 (0x8000)
+        result = (val >> 1) | (old_lsb << 15)
+
+        # Set Carry flag if LSB was 1, else clear it
+        if old_lsb:
+            setFlag(FLAG_C)
+        else:
+            clearFlag(FLAG_C)
+
+        registers[dst] = result
+        updateLogicFlags(result)
+        return True
+
+    #
+    # NEG (Two's complement negate)
+    #
+    elif opcode == OP_NEG:
+        dst = decoded["fieldB"]
+
+        if not validRegister(dst):
+            return False
+
+        val = registers[dst]
+
+        # Invert bits and add 1 (masked to 16 bits)
+        raw_result = (-val)
+        result = raw_result & 0xFFFF
+
+        # 1. Carry Flag: set for any non-zero value, cleared if negating 0
+        if val != 0:
+            setFlag(FLAG_C)
+        else:
+            clearFlag(FLAG_C)
+
+        # 2. Overflow Flag: set when negating 0x8000 (-32768) because 
+        # +32768 exceeds 16-bit signed range
+        if val == 0x8000:
+            setFlag(FLAG_V)
+        else:
+            clearFlag(FLAG_V)
+
+        registers[dst] = result
+        updateZNFlags(result)
+
+        return True
+
+    #
+    # MUL (Unsigned Multiply: dst * src -> R15:dst)
+    #
+    elif opcode == OP_MUL:
+        regs = getSrcDst(decoded)
+
+        if regs is None:
+            return False
+
+        src, dst = regs
+
+        val_src = registers[src]
+        val_dst = registers[dst]
+
+        # 32-bit unsigned product
+        product = val_dst * val_src
+
+        low_word = product & 0xFFFF
+        high_word = (product >> 16) & 0xFFFF
+
+        # Store low word in dst, high word in R15 (index 15)
+        registers[dst] = low_word
+        registers[15] = high_word
+
+        # C and V flags set if upper 16 bits are non-zero (significant upper bits exist)
+        if high_word != 0:
+            setFlag(FLAG_C)
+            setFlag(FLAG_V)
+        else:
+            clearFlag(FLAG_C)
+            clearFlag(FLAG_V)
+
+        updateZNFlags(low_word)
+
+        return True
+
+    #
+    # IMUL (Signed Multiply: dst * src -> R15:dst)
+    #
+    elif opcode == OP_IMUL:
+        regs = getSrcDst(decoded)
+
+        if regs is None:
+            return False
+
+        src, dst = regs
+
+        # Interpret 16-bit values as signed two's complement integers
+        val_src = registers[src] if registers[src] < 0x8000 else registers[src] - 0x10000
+        val_dst = registers[dst] if registers[dst] < 0x8000 else registers[dst] - 0x10000
+
+        # 32-bit signed product
+        product = val_dst * val_src
+
+        low_word = product & 0xFFFF
+        high_word = (product >> 16) & 0xFFFF
+
+        registers[dst] = low_word
+        registers[15] = high_word
+
+        # For IMUL, C and V set if high_word is NOT a simple sign extension of low_word
+        expected_sign_ext = 0xFFFF if (low_word & 0x8000) else 0x0000
+        if high_word != expected_sign_ext:
+            setFlag(FLAG_C)
+            setFlag(FLAG_V)
+        else:
+            clearFlag(FLAG_C)
+            clearFlag(FLAG_V)
+
+        updateZNFlags(low_word)
+
+        return True
+
+    #
+    # DIV (Unsigned Division: dst / src -> Quotient: dst, Remainder: R15)
+    #
+    elif opcode == OP_DIV:
+        regs = getSrcDst(decoded)
+
+        if regs is None:
+            return False
+
+        src, dst = regs
+
+        divisor = registers[src]
+        dividend = registers[dst]
+
+        # Divide-by-zero check (Fault hazard)
+        if divisor == 0:
+            return False
+
+        quotient = (dividend // divisor) & 0xFFFF
+        remainder = (dividend % divisor) & 0xFFFF
+
+        registers[dst] = quotient
+        registers[15] = remainder
+
+        # Logic flags: C and V cleared for standard division
+        clearFlag(FLAG_C)
+        clearFlag(FLAG_V)
+
+        updateZNFlags(quotient)
+
+        return True
+
+    #
+    # IDIV (Signed Division: dst / src -> Quotient: dst, Remainder: R15)
+    #
+    elif opcode == OP_IDIV:
+        regs = getSrcDst(decoded)
+
+        if regs is None:
+            return False
+
+        src, dst = regs
+
+        raw_src = registers[src]
+        raw_dst = registers[dst]
+
+        if raw_src == 0:
+            return False
+
+        # Convert 16-bit to Python signed ints
+        divisor = raw_src if raw_src < 0x8000 else raw_src - 0x10000
+        dividend = raw_dst if raw_dst < 0x8000 else raw_dst - 0x10000
+
+        # Truncate towards zero (C/x86 convention for signed integer division)
+        quotient_signed = int(dividend / divisor)
+        remainder_signed = dividend - (quotient_signed * divisor)
+
+        quotient = quotient_signed & 0xFFFF
+        remainder = remainder_signed & 0xFFFF
+
+        registers[dst] = quotient
+        registers[15] = remainder
+
+        clearFlag(FLAG_C)
+        clearFlag(FLAG_V)
+
+        updateZNFlags(quotient)
+
+        return True
+
 def updateLogicFlags(result):
     """
     Update flags for logic operations: Zero and Negative reflect the result,
