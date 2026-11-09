@@ -802,12 +802,32 @@ def execALUOp(decoded):
 
         src, dst = regs
 
-        result = (
-            registers[dst] + registers[src]
-        ) & 0xFFFF
+        src_val = registers[src]
+        dst_val = registers[dst]
+
+        raw_result = dst_val + src_val
+        result = raw_result & 0xFFFF
+
+        # 1. Handle Carry flag (Unsigned overflow, bit 0 / FLAG_C)
+        if raw_result > 0xFFFF:
+            setFlag(FLAG_C)
+        else:
+            clearFlag(FLAG_C)
+
+        # 2. Handle Overflow flag (Signed two's-complement overflow, bit 3 / FLAG_V)
+        # Overflow happens if adding two numbers of the same sign yields a result with the opposite sign
+        src_sign = (src_val >> 15) & 1
+        dst_sign = (dst_val >> 15) & 1
+        res_sign = (result >> 15) & 1
+
+        if (dst_sign == src_sign) and (res_sign != dst_sign):
+            setFlag(FLAG_V)
+        else:
+            clearFlag(FLAG_V)
 
         registers[dst] = result
 
+        # Updates Z and N flags as usual
         updateZNFlags(result)
 
         return True
@@ -823,12 +843,33 @@ def execALUOp(decoded):
 
         src, dst = regs
 
-        result = (
-            registers[dst] - registers[src]
-        ) & 0xFFFF
+        src_val = registers[src]
+        dst_val = registers[dst]
+
+        raw_result = dst_val - src_val
+        result = raw_result & 0xFFFF
+
+        # 1. Handle Carry / Borrow flag (Bit 0 / FLAG_C)
+        # Unsigned borrow occurs if src > dst (i.e., raw_result < 0)
+        if raw_result < 0:
+            setFlag(FLAG_C)
+        else:
+            clearFlag(FLAG_C)
+
+        # 2. Handle Overflow flag (Signed two's-complement overflow, Bit 3 / FLAG_V)
+        # Overflow happens if operands have opposite signs AND the result sign differs from destination sign
+        src_sign = (src_val >> 15) & 1
+        dst_sign = (dst_val >> 15) & 1
+        res_sign = (result >> 15) & 1
+
+        if (dst_sign != src_sign) and (res_sign != dst_sign):
+            setFlag(FLAG_V)
+        else:
+            clearFlag(FLAG_V)
 
         registers[dst] = result
 
+        # Updates Z and N flags as usual
         updateZNFlags(result)
 
         return True
@@ -842,9 +883,22 @@ def execALUOp(decoded):
         if not validRegister(dst):
             return False
 
-        result = (
-            registers[dst] + 1
-        ) & 0xFFFF
+        orig_val = registers[dst]
+        raw_result = orig_val + 1
+        result = raw_result & 0xFFFF
+
+        # 1. Handle Carry flag (Unsigned overflow past 0xFFFF)
+        if raw_result > 0xFFFF:
+            setFlag(FLAG_C)
+        else:
+            clearFlag(FLAG_C)
+
+        # 2. Handle Overflow flag (Signed overflow when 0x7FFF becomes 0x8000)
+        # 0x7FFF (+32767) + 1 becomes 0x8000 (-32768), which triggers signed overflow
+        if orig_val == 0x7FFF:
+            setFlag(FLAG_V)
+        else:
+            clearFlag(FLAG_V)
 
         registers[dst] = result
 
@@ -861,9 +915,21 @@ def execALUOp(decoded):
         if not validRegister(dst):
             return False
 
-        result = (
-            registers[dst] - 1
-        ) & 0xFFFF
+        orig_val = registers[dst]
+        raw_result = orig_val - 1
+        result = raw_result & 0xFFFF
+
+        # 1. Handle Carry / Borrow flag (Underflow below 0)
+        if raw_result < 0:
+            setFlag(FLAG_C)
+        else:
+            clearFlag(FLAG_C)
+
+        # 2. Handle Overflow flag (Signed overflow when 0x8000 becomes 0x7FFF)
+        if orig_val == 0x8000:
+            setFlag(FLAG_V)
+        else:
+            clearFlag(FLAG_V)
 
         registers[dst] = result
 
@@ -882,9 +948,27 @@ def execALUOp(decoded):
 
         src, dst = regs
 
-        result = (
-            registers[dst] - registers[src]
-        ) & 0xFFFF
+        src_val = registers[src]
+        dst_val = registers[dst]
+
+        raw_result = dst_val - src_val
+        result = raw_result & 0xFFFF
+
+        # 1. Handle Carry / Borrow flag (Bit 0 / FLAG_C)
+        if raw_result < 0:
+            setFlag(FLAG_C)
+        else:
+            clearFlag(FLAG_C)
+
+        # 2. Handle Overflow flag (Signed two's-complement overflow, Bit 3 / FLAG_V)
+        src_sign = (src_val >> 15) & 1
+        dst_sign = (dst_val >> 15) & 1
+        res_sign = (result >> 15) & 1
+
+        if (dst_sign != src_sign) and (res_sign != dst_sign):
+            setFlag(FLAG_V)
+        else:
+            clearFlag(FLAG_V)
 
         # CMP only updates flags; the destination is left untouched.
         updateZNFlags(result)
@@ -908,7 +992,7 @@ def execALUOp(decoded):
 
         registers[dst] = result
 
-        updateZNFlags(result)
+        updateLogicFlags(result)
 
         return True
 
@@ -929,7 +1013,7 @@ def execALUOp(decoded):
 
         registers[dst] = result
 
-        updateZNFlags(result)
+        updateLogicFlags(result)
 
         return True
 
@@ -950,7 +1034,7 @@ def execALUOp(decoded):
 
         registers[dst] = result
 
-        updateZNFlags(result)
+        updateLogicFlags(result)
 
         return True
 
@@ -969,11 +1053,20 @@ def execALUOp(decoded):
 
         registers[dst] = result
 
-        updateZNFlags(result)
+        updateLogicFlags(result)
 
         return True
 
     return False
+
+def updateLogicFlags(result):
+    """
+    Update flags for logic operations: Zero and Negative reflect the result,
+    while Carry and Overflow are explicitly cleared.
+    """
+    clearFlag(FLAG_C)
+    clearFlag(FLAG_V)
+    updateZNFlags(result)
 
 def executeInstruction(decoded):
     """
