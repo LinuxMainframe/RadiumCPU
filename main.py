@@ -288,6 +288,20 @@ OP_ROR                 = 0x23   #: Rotate right.
 OP_LD                  = 0x28   #: Load value from memory
 OP_STR                 = 0x29   #: Store value into memory
 
+# Control Flow
+OP_JMP                 = 0x30   #: Unconditional absolute jump (2-word).
+OP_JMPR                = 0x31   #: Unconditional register-indirect jump.
+OP_JE                  = 0x32   #: Jump if Equal / Zero (Z = 1).
+OP_JNE                 = 0x33   #: Jump if Not Equal / Not Zero (Z = 0).
+OP_JL                  = 0x34   #: Jump if Less (Signed: N != V).
+OP_JGE                 = 0x35   #: Jump if Greater or Equal (Signed: N == V).
+OP_JB                  = 0x36   #: Jump if Below / Carry (Unsigned: C = 1).
+OP_JAE                 = 0x37   #: Jump if Above or Equal / No Carry (Unsigned: C = 0).
+OP_JA                  = 0x38   #: Jump if Above (Unsigned: C = 0 and Z = 0).
+OP_JBE                 = 0x39   #: Jump if Below or Equal (Unsigned: C = 1 or Z = 1).
+OP_JO                  = 0x3A   #: Jump if Overflow (V = 1).
+OP_JNO                 = 0x3B   #: Jump if No Overflow (V = 0).
+
 # =============================================================
 #   MEMORY HELPERS
 # =============================================================
@@ -1429,6 +1443,126 @@ def execMemoryOp(decoded):
 
     return False
 
+# =============================================================
+#    CONTROL FAMILY EXECUTION
+# =============================================================
+
+def execControlOp(decoded):
+    """
+    Execute a Control-family instruction (JMP, conditional jumps).
+
+    :param dict decoded: Output of :func:`decodeInstruction`.
+    :return: ``True`` if executed successfully, ``False`` otherwise.
+    :rtype: bool
+    """
+    opcode = decoded["opcode"]
+
+    # Helper function to evaluate conditional jump branches
+    def evaluate_branch(condition):
+        # 1. Fetch the 16-bit target address sitting in the instruction stream
+        target_addr = readWord(special["PC"])
+        if target_addr is None:
+            return False
+        
+        # 2. Advance PC past the target word regardless
+        special["PC"] += 2
+
+        # 3. If condition matches, update PC to jump
+        if condition:
+            special["PC"] = target_addr
+
+        return True
+
+    #
+    # JMP (Unconditional Absolute Jump)
+    #
+    if opcode == OP_JMP:
+        target_addr = readWord(special["PC"])
+        if target_addr is None:
+            return False
+        special["PC"] = target_addr
+        return True
+
+    #
+    # JMPR (Unconditional Register-Indirect Jump: jump to address in Field B)
+    #
+    elif opcode == OP_JMPR:
+        reg = decoded["fieldB"]
+        if not validRegister(reg):
+            return False
+        special["PC"] = registers[reg]
+        return True
+
+    #
+    # JE / JZ (Jump if Equal / Zero)
+    #
+    elif opcode == OP_JE:
+        return evaluate_branch(isFlagSet(FLAG_Z))
+
+    #
+    # JNE / JNZ (Jump if Not Equal / Not Zero)
+    #
+    elif opcode == OP_JNE:
+        return evaluate_branch(not isFlagSet(FLAG_Z))
+
+    #
+    # JL (Jump if Less - Signed: N != V)
+    #
+    elif opcode == OP_JL:
+        n_flag = isFlagSet(FLAG_N)
+        v_flag = isFlagSet(FLAG_V)
+        return evaluate_branch(n_flag != v_flag)
+
+    #
+    # JGE (Jump if Greater or Equal - Signed: N == V)
+    #
+    elif opcode == OP_JGE:
+        n_flag = isFlagSet(FLAG_N)
+        v_flag = isFlagSet(FLAG_V)
+        return evaluate_branch(n_flag == v_flag)
+
+    #
+    # JB / JC (Jump if Below / Carry - Unsigned)
+    #
+    elif opcode == OP_JB:
+        return evaluate_branch(isFlagSet(FLAG_C))
+
+    #
+    # JAE / JNC (Jump if Above or Equal / No Carry - Unsigned)
+    #
+    elif opcode == OP_JAE:
+        return evaluate_branch(not isFlagSet(FLAG_C))
+
+    #
+    # JA (Jump if Above - Unsigned: C = 0 and Z = 0)
+    #
+    elif opcode == OP_JA:
+        c_flag = isFlagSet(FLAG_C)
+        z_flag = isFlagSet(FLAG_Z)
+        return evaluate_branch(not c_flag and not z_flag)
+
+    #
+    # JBE (Jump if Below or Equal - Unsigned: C = 1 or Z = 1)
+    #
+    elif opcode == OP_JBE:
+        c_flag = isFlagSet(FLAG_C)
+        z_flag = isFlagSet(FLAG_Z)
+        return evaluate_branch(c_flag or z_flag)
+
+    #
+    # JO (Jump if Overflow)
+    #
+    elif opcode == OP_JO:
+        return evaluate_branch(isFlagSet(FLAG_V))
+
+    #
+    # JNO (Jump if No Overflow)
+    #
+    elif opcode == OP_JNO:
+        return evaluate_branch(not isFlagSet(FLAG_V))
+
+    return False
+
 def executeInstruction(decoded):
     """
     Dispatch a decoded instruction to the executor for its family.
@@ -1443,6 +1577,8 @@ def executeInstruction(decoded):
         return execALUOp(decoded)
     elif family == FMT_MEMORY:
         return execMemoryOp(decoded)
+    elif family == FMT_CONTROL:
+        return execControlOp(decoded)
 
     return False
 
