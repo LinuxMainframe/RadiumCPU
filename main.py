@@ -302,6 +302,15 @@ OP_JBE                 = 0x39   #: Jump if Below or Equal (Unsigned: C = 1 or Z 
 OP_JO                  = 0x3A   #: Jump if Overflow (V = 1).
 OP_JNO                 = 0x3B   #: Jump if No Overflow (V = 0).
 
+# Subroutines & Interrupt Returns
+OP_CALL                = 0x3C   #: Absolute subroutine call (2-word).
+OP_CALLR               = 0x3D   #: Register-indirect subroutine call.
+OP_RET                 = 0x3E   #: Return from subroutine.
+OP_IRET                = 0x3F   #: Return from interrupt (restores flags and PC).
+
+# Interrupts & Traps
+OP_INT                 = 0x40   #: Software interrupt / trap.
+
 # =============================================================
 #   MEMORY HELPERS
 # =============================================================
@@ -1561,7 +1570,125 @@ def execControlOp(decoded):
     elif opcode == OP_JNO:
         return evaluate_branch(not isFlagSet(FLAG_V))
 
+    #
+    # CALL (Absolute Subroutine Call: 2-word instruction)
+    #
+    elif opcode == OP_CALL:
+        # 1. Read the 16-bit target address from the instruction stream
+        target_addr = readWord(special["PC"])
+        if target_addr is None:
+            return False
+        
+        # 2. Advance PC past the target address word so it points to the return address
+        special["PC"] += 2
+
+        # 3. Push the 16-bit return address onto the descending stack
+        pushWord(special["PC"])
+
+        # 4. Jump to the subroutine target address
+        special["PC"] = target_addr
+        return True
+
+    #
+    # CALLR (Register-Indirect Subroutine Call)
+    #
+    elif opcode == OP_CALLR:
+        reg = decoded["fieldB"]
+        if not validRegister(reg):
+            return False
+
+        # 1. Push current PC (already advanced past this 1-word instruction) onto stack
+        pushWord(special["PC"])
+
+        # 2. Jump to the address stored in the register
+        special["PC"] = registers[reg]
+        return True
+
+    #
+    # RET (Return from Subroutine)
+    #
+    elif opcode == OP_RET:
+        # 1. Pop the 16-bit return address from the stack
+        return_addr = popWord()
+        if return_addr is None:
+            return False
+
+        # 2. Restore PC to resume execution after the call
+        special["PC"] = return_addr
+        return True
+
+    #
+    # IRET (Return from Interrupt)
+    #
+    elif opcode == OP_IRET:
+        # 1. Pop FLAGS first (since it was pushed last)
+        flags_val = popWord()
+        
+        # 2. Pop return address into PC (since it was pushed first)
+        return_addr = popWord()
+
+        if flags_val is None or return_addr is None:
+            return False
+
+        special["FLAGS"] = flags_val & 0xFFFF
+        special["PC"] = return_addr
+        
+        return True
+
+    #
+    # INT (Software Interrupt / Trap)
+    # Encoded with vector ID in fieldB (or lower byte)
+    #
+    elif opcode == OP_INT:
+        vector_index = decoded["fieldB"]
+
+        # Defaulting user-gate or system trap behavior:
+        # Let's treat fieldB as a User vector, or route via system gateway if specified.
+        success = triggerInterrupt(is_system=False, vector_index=vector_index)
+        return success
+
     return False
+
+# =============================================================
+#    INTERRUPT DISPATCH ENGINE
+# =============================================================
+
+def triggerInterrupt(is_system, vector_index):
+    """
+    Dispatch a system or user interrupt:
+    1. Resolve vector address from SIVBR or UIVBR.
+    2. Read ISR address from the appropriate IVT.
+    3. Push current PC and FLAGS onto the stack (Interrupt Stack Frame).
+    4. Disable maskable interrupts (clear IF).
+    5. Jump PC to the ISR routine.
+
+    :param bool is_system: True for System IVT, False for User IVT.
+    :param int vector_index: Vector ID (SYS_* or USR_*).
+    :return: ``True`` if dispatched successfully, ``False`` on fault.
+    :rtype: bool
+    """
+    # 1. Resolve IVT entry address
+    if is_system:
+        vector_addr = calcSIVTAddr(vector_index)
+    else:
+        vector_addr = calcUIVTAddr(vector_index)
+
+    # 2. Read target ISR address from IVT
+    isr_addr = readWord(vector_addr)
+    if isr_addr is None:
+        return False  # Unmapped or invalid vector table access
+
+    # 3. Push Interrupt Stack Frame (PC first, then FLAGS)
+    pushWord(special["PC"])
+    pushWord(special["FLAGS"])
+
+    # 4. Clear Interrupt Flag (IF) to disable nested maskable interrupts
+    clearFlag(FLAG_IF)
+
+    # 5. Jump PC to the Interrupt Service Routine
+    special["PC"] = isr_addr
+
+    return True
 
 def executeInstruction(decoded):
     """
