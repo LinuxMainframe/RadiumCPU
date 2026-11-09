@@ -250,6 +250,7 @@ OP_NOP                 = 0x00   #: No operation.
 OP_MOV                 = 0x01   #: Move register to register.
 OP_SWAP                = 0x02   #: Swap two registers.
 OP_LEA                 = 0x03   #: Load effective address.
+OP_MOVI                = 0x04   #: Load immediate value
 
 #Arithmetic
 OP_ADD                 = 0x08   #: Add.
@@ -283,6 +284,9 @@ OP_SHR                 = 0x21   #: Shift right.
 
 OP_ROL                 = 0x22   #: Rotate left.
 OP_ROR                 = 0x23   #: Rotate right.
+
+OP_LD                  = 0x28   #: Load value from memory
+OP_STR                 = 0x29   #: Store value into memory
 
 # =============================================================
 #   MEMORY HELPERS
@@ -772,6 +776,29 @@ def execALUOp(decoded):
         src, dst = regs
 
         registers[dst] = registers[src]
+
+        return True
+
+    #
+    # MOVI (Move Immediate 16-bit literal into target register)
+    # Encoded with target register in fieldB, followed by a 16-bit immediate word.
+    #
+    elif opcode == OP_MOVI:
+        dst = decoded["fieldB"]
+        if not validRegister(dst):
+            return False
+
+        # 1. Fetch the 16-bit literal word sitting immediately after the instruction stream
+        imm_val = readWord(special["PC"])
+        if imm_val is None:
+            return False
+
+        # 2. Advance PC by 2 bytes to skip over the immediate value
+        special["PC"] += 2
+
+        # 3. Load into destination register and update Z and N flags
+        registers[dst] = imm_val
+        updateZNFlags(imm_val)
 
         return True
 
@@ -1329,20 +1356,82 @@ def execALUOp(decoded):
 
         return True
 
-def updateLogicFlags(result):
+# =============================================================
+#    MEMORY FAMILY EXECUTION
+# =============================================================
+
+def execMemoryOp(decoded):
     """
-    Update flags for logic operations: Zero and Negative reflect the result,
-    while Carry and Overflow are explicitly cleared.
+    Execute a Memory-family instruction (LD, STR).
+
+    Opcodes:
+        - OP_LD (0x28): Load from memory address in Field A into register in Field B.
+        - OP_STR (0x29): Store register in Field B into memory address in Field A.
+    
+    Size bit:
+        - size = 0: Byte operation (8-bit)
+        - size = 1: Word operation (16-bit)
+
+    :param dict decoded: Output of :func:`decodeInstruction`.
+    :return: ``True`` if the instruction executed successfully, ``False`` otherwise.
+    :rtype: bool
     """
-    clearFlag(FLAG_C)
-    clearFlag(FLAG_V)
-    updateZNFlags(result)
+    opcode = decoded["opcode"]
+    sz = decoded["size"]
+    
+    # Extract pointer source (Field A) and data target/source (Field B)
+    regs = getSrcDst(decoded)
+    if regs is None:
+        return False
+
+    ptr_reg, data_reg = regs
+    addr = registers[ptr_reg]
+
+    #
+    # OP_LD (Load from memory)
+    #
+    if opcode == OP_LD:
+        if sz == 1:
+            # Word Load (16-bit)
+            val = readWord(addr)
+            if val is None:
+                return False  # Unmapped or cross-device word violation
+            registers[data_reg] = val
+            updateZNFlags(val)
+        else:
+            # Byte Load (8-bit, zero-extended to 16 bits)
+            val = readByte(addr)
+            if val is None:
+                return False  # Unmapped address
+            registers[data_reg] = val & 0xFF
+            updateZNFlags(val & 0xFF)
+
+        return True
+
+    #
+    # OP_STR (Store to memory)
+    #
+    elif opcode == OP_STR:
+        val = registers[data_reg]
+
+        if sz == 1:
+            # Word Store (16-bit)
+            success = writeWord(addr, val)
+            if not success:
+                return False  # ROM write-protection, unmapped, or cross-device violation
+        else:
+            # Byte Store (8-bit)
+            success = writeByte(addr, val & 0xFF)
+            if not success:
+                return False  # ROM write-protection or unmapped
+
+        return True
+
+    return False
 
 def executeInstruction(decoded):
     """
     Dispatch a decoded instruction to the executor for its family.
-
-    Only the ALU family is implemented so far.
 
     :param dict decoded: Output of :func:`decodeInstruction`.
     :return: ``True`` if the instruction executed, ``False`` otherwise.
@@ -1352,6 +1441,8 @@ def executeInstruction(decoded):
 
     if family == FMT_ALU:
         return execALUOp(decoded)
+    elif family == FMT_MEMORY:
+        return execMemoryOp(decoded)
 
     return False
 
@@ -1426,6 +1517,15 @@ def updateZNFlags(result):
         setFlag(FLAG_N)
     else:
         clearFlag(FLAG_N)
+
+def updateLogicFlags(result):
+    """
+    Update flags for logic operations: Zero and Negative reflect the result,
+    while Carry and Overflow are explicitly cleared.
+    """
+    clearFlag(FLAG_C)
+    clearFlag(FLAG_V)
+    updateZNFlags(result)
 
 def getSrcDst(decoded):
     """
